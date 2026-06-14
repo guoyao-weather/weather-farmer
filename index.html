@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://api.open-meteo.com https://ip-api.com https://wttr.in; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.open-meteo.com https://ip-api.com https://wttr.in;">
+<meta http-equiv="X-Frame-Options" content="DENY">
+<title>农民天气播报</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;touch-action:manipulation}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:-apple-system,'PingFang SC',sans-serif;background:linear-gradient(180deg,#1a73e8,#4fc3f7,#81d4fa);transition:background 1.5s}
+body.night{background:linear-gradient(180deg,#0d1b2a,#1b2838,#415a77)}
+body.rain{background:linear-gradient(180deg,#37474f,#546e7a,#78909c)}
+body.hot{background:linear-gradient(180deg,#ff6f00,#ffab40,#ffcc80)}
+.icon{font-size:120px;animation:pulse 3s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+.btn{width:180px;height:180px;border-radius:50%;border:6px solid rgba(255,255,255,.5);background:rgba(255,255,255,.2);backdrop-filter:blur(10px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:64px;transition:all .25s;box-shadow:0 12px 40px rgba(0,0,0,.2);position:relative;outline:none;-webkit-user-select:none}
+.btn:active{transform:scale(.92)}
+.btn.load{animation:spin 1s linear infinite}
+.btn.speak{border-color:rgba(255,255,255,.9);box-shadow:0 0 80px rgba(255,255,255,.5)}
+@keyframes spin{100%{transform:rotate(360deg)}}
+.dot{width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.6);margin:15px 0;transition:all .4s}
+.dot.ok{background:#4caf50;box-shadow:0 0 16px #4caf50}
+.dot.err{background:#f44336;box-shadow:0 0 16px #f44336}
+.hint{color:rgba(255,255,255,.8);font-size:18px;letter-spacing:2px}
+.detail{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.85);color:#fff;padding:20px;border-radius:20px 20px 0 0;transform:translateY(100%);transition:transform .3s;z-index:50;max-height:60vh;overflow-y:auto}
+.detail.show{transform:translateY(0)}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.1)}
+</style>
+</head>
+<body>
+<div style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:20px">
+  <div class="icon" id="icon">🌤️</div>
+  <button class="btn" id="btn" onclick="go()">
+    <span id="ico">▶</span>
+  </button>
+  <div class="dot" id="dot"></div>
+  <div class="hint" id="hint">👆 点这里听天气</div>
+</div>
+<div class="detail" id="detail"><div id="dcon"></div></div>
+
+<script>
+var speaking=false,utt=null;
+
+var WMO={0:{i:'☀️',d:'晴天'},1:{i:'🌤️',d:'少云'},2:{i:'⛅',d:'多云'},3:{i:'☁️',d:'阴天'},45:{i:'🌫️',d:'有雾'},48:{i:'🌫️',d:'浓雾'},51:{i:'🌦️',d:'毛毛雨'},53:{i:'🌦️',d:'小雨'},55:{i:'🌧️',d:'中雨'},56:{i:'🌧️',d:'冻毛毛雨'},57:{i:'🌧️',d:'冻雨'},61:{i:'🌧️',d:'小雨'},63:{i:'🌧️',d:'中雨'},65:{i:'🌧️',d:'大雨'},66:{i:'🌧️',d:'冻雨'},67:{i:'🌧️',d:'大冻雨'},71:{i:'❄️',d:'小雪'},73:{i:'❄️',d:'中雪'},75:{i:'❄️',d:'大雪'},77:{i:'🌨️',d:'雨夹雪'},80:{i:'🌦️',d:'阵雨'},81:{i:'🌧️',d:'中阵雨'},82:{i:'⛈️',d:'大阵雨'},85:{i:'🌨️',d:'小阵雪'},86:{i:'🌨️',d:'大阵雪'},95:{i:'⛈️',d:'雷阵雨'},96:{i:'⛈️',d:'雷暴冰雹'},99:{i:'⛈️',d:'强雷暴'}};
+var RAIN=new Set([51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99]);
+var BFORT=[[0,'无风'],[1,'软风'],[2,'轻风'],[3,'微风'],[4,'和风'],[5,'清劲风'],[6,'强风'],[7,'疾风'],[8,'大风'],[9,'烈风'],[10,'狂风'],[11,'暴风'],[12,'飓风']];
+function wind(s){var v='';for(var i=BFORT.length-1;i>=0;i--){if(s>=BFORT[i][0])v=BFORT[i][1]}return v||'无风'}
+function wc(c){return WMO[c]||{i:'🌤️',d:'多云'}}
+function night(){var h=new Date().getHours();return h<6||h>=19}
+function theme(c,t){var cls='';if(RAIN.has(c))cls='rain';else if(night())cls='night';else if(typeof t==='number'&&t>33)cls='hot';document.body.className=cls}
+function day(off){var d=new Date();d.setDate(d.getDate()+off);var l=['今天','明天','后天'];return(l[off]||'大后天')+'（'+(d.getMonth()+1)+'月'+d.getDate()+'号）'}
+
+function vibrate(){try{navigator.vibrate&&navigator.vibrate(20)}catch(e){}}
+
+function getPos(){
+  return new Promise(function(ok,no){
+    if(!navigator.geolocation){no();return}
+    navigator.geolocation.getCurrentPosition(
+      function(p){ok({lat:p.coords.latitude,lon:p.coords.longitude})},
+      function(){no()},
+      {enableHighAccuracy:true,timeout:10000}
+    );
+  });
+}
+
+function getIP(){
+  return fetch('https://ip-api.com/json/?lang=zh-CN&fields=lat,lon', {signal:AbortSignal.timeout(5000)})
+    .then(function(r){return r.json()})
+    .then(function(d){if(d.lat&&d.lon)return{lat:d.lat,lon:d.lon};throw 0});
+}
+
+function getWeather(lat,lon){
+  var url='https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)+'&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max&timezone=auto&forecast_days=4';
+  return fetch(url,{signal:AbortSignal.timeout(10000)})
+    .then(function(r){if(!r.ok)throw 0;return r.json()});
+}
+
+function say(text){
+  return new Promise(function(ok,no){
+    if(!window.speechSynthesis){no();return}
+    window.speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang='zh-CN';u.rate=0.9;u.pitch=1.05;u.volume=1;
+    var v=window.speechSynthesis.getVoices();
+    var zh=v.find(function(x){return x.lang.startsWith('zh')});
+    if(zh)u.voice=zh;
+    u.onend=ok;
+    u.onerror=no;
+    window.speechSynthesis.speak(u);
+  });
+}
+
+function buildText(d){
+  var parts=['开始播报天气。'];
+  var now=d.current;
+  var w=wc(now.weather_code);
+  theme(now.weather_code,now.temperature_2m);
+  var tmp=Math.round(now.temperature_2m)||0;
+  var hum=now.relative_humidity_2m||0;
+  parts.push('现在天气：'+w.d+'，温度'+tmp+'度，'+wind(now.wind_speed_10m)+'，湿度百分之'+hum+'。');
+  if(hum>85)parts.push('湿度很大，注意病虫害。');
+  else if(hum<30)parts.push('空气干燥，注意灌溉。');
+  for(var i=0;i<4;i++){
+    var dw=wc(d.daily.weather_code[i]);
+    var mx=Math.round(d.daily.temperature_2m_max[i]||0);
+    var mn=Math.round(d.daily.temperature_2m_min[i]||0);
+    var rn=d.daily.precipitation_probability_max[i]||0;
+    var wd=wind(d.daily.wind_speed_10m_max[i]||0);
+    var s=day(i)+'：'+dw.d+'，'+mn+'度到'+mx+'度';
+    if(rn>30)s+='，下雨可能性百分之'+rn;
+    if(wd!=='无风'&&wd!=='软风'&&wd!=='轻风')s+='，'+wd;
+    parts.push(s+'。');
+  }
+  var adv=[];
+  var tc=d.daily.weather_code[0],tmc=d.daily.weather_code[1];
+  var rp=Math.max(d.daily.precipitation_probability_max[0]||0,d.daily.precipitation_probability_max[1]||0);
+  if(RAIN.has(tc)||RAIN.has(tmc))adv.push('最近有雨，不适合打药施肥。');
+  else if(rp>50)adv.push('可能下雨，注意抢收粮食。');
+  if(d.daily.temperature_2m_max[0]>35)adv.push('温度高，注意防暑。');
+  if(d.daily.temperature_2m_min[0]<5)adv.push('温度低，大棚注意保暖。');
+  if(adv.length===0)adv.push('天气不错，适合下地干活。');
+  parts.push('种地提醒：'+adv.join(''));
+  parts.push('播报完毕，祝您丰收！');
+  return parts.join('');
+}
+
+function splitText(t){
+  var ss=t.match(/.*?[。！？]/g);
+  if(!ss||ss.length===0)ss=[t];
+  var chunks=[],cur='';
+  for(var i=0;i<ss.length;i++){
+    if((cur+ss[i]).length>150&&cur){chunks.push(cur);cur=ss[i]}
+    else cur+=ss[i];
+  }
+  if(cur)chunks.push(cur);
+  return chunks;
+}
+
+function speakAll(text){
+  var chunks=splitText(text);
+  var i=0;
+  function next(){
+    if(i>=chunks.length||!speaking)return Promise.resolve();
+    return say(chunks[i++]).then(function(){return new Promise(function(r){setTimeout(r,200)}).then(next)});
+  }
+  return next();
+}
+
+function showDetail(d){
+  var now=d.current;
+  var w=wc(now.weather_code);
+  var h='<div class="row"><span>当前</span><span>'+w.d+' '+Math.round(now.temperature_2m)+'°C 湿度'+(now.relative_humidity_2m||0)+'%</span></div>';
+  for(var i=0;i<4;i++){
+    var dw=wc(d.daily.weather_code[i]);
+    var mx=Math.round(d.daily.temperature_2m_max[i]||0);
+    var mn=Math.round(d.daily.temperature_2m_min[i]||0);
+    var rn=d.daily.precipitation_probability_max[i]||0;
+    var labels=['今天','明天','后天','大后天'];
+    h+='<div class="row"><span>'+labels[i]+'</span><span>'+dw.d+' '+mn+'~'+mx+'°C 降雨'+rn+'%</span></div>';
+  }
+  document.getElementById('dcon').innerHTML=h;
+  document.getElementById('detail').classList.add('show');
+}
+
+function setUI(d){
+  var now=d.current;
+  var w=wc(now.weather_code);
+  document.getElementById('icon').textContent=night()?{'☀️':'🌙','🌤️':'🌙'}.get(w.i)||w.i:w.i;
+  document.getElementById('dot').className='dot ok';
+  document.getElementById('hint').textContent='🔊 正在播报...';
+  showDetail(d);
+}
+
+function go(){
+  vibrate();
+  var btn=document.getElementById('btn');
+  var ico=document.getElementById('ico');
+  var hint=document.getElementById('hint');
+  var dot=document.getElementById('dot');
+  var icon=document.getElementById('icon');
+
+  if(speaking){
+    speaking=false;
+    window.speechSynthesis.cancel();
+    utt=null;
+    btn.className='btn';
+    ico.textContent='▶';
+    hint.textContent='👆 点这里听天气';
+    dot.className='dot';
+    return;
+  }
+
+  speaking=true;
+  btn.className='btn load';
+  ico.textContent='📍';
+  hint.textContent='正在获取位置...';
+  dot.className='dot';
+  icon.textContent='🌤️';
+
+  function fail(msg){
+    btn.className='btn';
+    ico.textContent='▶';
+    speaking=false;
+    dot.className='dot err';
+    hint.textContent='网络慢，再点一次';
+    say('网络不太顺畅，再点一次试试。').catch(function(){});
+  }
+
+  var posPromise=getPos().catch(function(){
+    return getIP().catch(function(){return{lat:35.86,lon:104.19}});
+  });
+
+  posPromise.then(function(pos){
+    ico.textContent='🌐';
+    hint.textContent='正在查天气...';
+    return getWeather(pos.lat,pos.lon);
+  }).then(function(d){
+    setUI(d);
+    btn.className='btn speak';
+    ico.textContent='⏹';
+    speaking=true;
+    return speakAll(buildText(d));
+  }).then(function(){
+    btn.className='btn';
+    ico.textContent='▶';
+    hint.textContent='👆 再听一遍';
+    speaking=false;
+  }).catch(function(){
+    btn.className='btn';
+    ico.textContent='▶';
+    hint.textContent='网络慢，再点一次';
+    speaking=false;
+    dot.className='dot err';
+    say('网络不太顺畅，再点一次试试。').catch(function(){});
+  });
+}
+
+if(window.speechSynthesis){
+  window.speechSynthesis.onvoiceschanged=function(){window.speechSynthesis.getVoices()};
+  window.speechSynthesis.getVoices();
+}
+</script>
+</body>
+</html>
