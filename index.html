@@ -4,21 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://api.open-meteo.com https://ip-api.com https://wttr.in; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.open-meteo.com https://ip-api.com https://wttr.in;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://api.open-meteo.com https://ip-api.com https://ipapi.co https://wttr.in https://nominatim.openstreetmap.org; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.open-meteo.com https://ip-api.com https://ipapi.co https://wttr.in https://nominatim.openstreetmap.org;">
 <meta http-equiv="X-Frame-Options" content="DENY">
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta name="referrer" content="no-referrer">
 <title>农民天气播报</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;touch-action:manipulation}
+html,body{width:100%;height:100%;overflow:hidden;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 body{display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:-apple-system,'PingFang SC',sans-serif;background:linear-gradient(180deg,#1a73e8,#4fc3f7,#81d4fa);transition:background 1.5s}
 body.night{background:linear-gradient(180deg,#0d1b2a,#1b2838,#415a77)}
 body.rain{background:linear-gradient(180deg,#37474f,#546e7a,#78909c)}
 body.hot{background:linear-gradient(180deg,#ff6f00,#ffab40,#ffcc80)}
 .icon{font-size:120px;animation:pulse 3s ease-in-out infinite}
 @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
-.btn{width:180px;height:180px;border-radius:50%;border:6px solid rgba(255,255,255,.5);background:rgba(255,255,255,.2);backdrop-filter:blur(10px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:64px;transition:all .25s;box-shadow:0 12px 40px rgba(0,0,0,.2);position:relative;outline:none;-webkit-user-select:none}
+.btn{width:180px;height:180px;border-radius:50%;border:6px solid rgba(255,255,255,.5);background:rgba(255,255,255,.2);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:64px;transition:all .25s;box-shadow:0 12px 40px rgba(0,0,0,.2);position:relative;outline:none;-webkit-user-select:none;user-select:none}
 .btn:active{transform:scale(.92)}
 .btn.load{animation:spin 1s linear infinite}
 .btn.speak{border-color:rgba(255,255,255,.9);box-shadow:0 0 80px rgba(255,255,255,.5)}
@@ -26,97 +26,114 @@ body.hot{background:linear-gradient(180deg,#ff6f00,#ffab40,#ffcc80)}
 .dot{width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.6);margin:15px 0;transition:all .4s}
 .dot.ok{background:#4caf50;box-shadow:0 0 16px #4caf50}
 .dot.err{background:#f44336;box-shadow:0 0 16px #f44336}
-.hint{color:rgba(255,255,255,.8);font-size:18px;letter-spacing:2px}
+.hint{color:rgba(255,255,255,.8);font-size:18px;letter-spacing:2px;text-align:center}
+.hint small{font-size:12px;opacity:.7}
 .detail{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.85);color:#fff;padding:20px;border-radius:20px 20px 0 0;transform:translateY(100%);transition:transform .3s;z-index:50;max-height:60vh;overflow-y:auto}
 .detail.show{transform:translateY(0)}
 .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.1)}
+.close-btn{text-align:center;padding:10px;color:#aaa;font-size:14px;cursor:pointer}
 </style>
 </head>
 <body>
 <div style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:20px">
   <div class="icon" id="icon">🌤️</div>
-  <button class="btn" id="btn" onclick="go()">
+  <button class="btn" id="btn" onmousedown="onDown(event)" onmouseup="onUp(event)" ontouchstart="onDown(event)" ontouchend="onUp(event)">
     <span id="ico">▶</span>
   </button>
   <div class="dot" id="dot"></div>
-  <div class="hint" id="hint">👆 点这里听天气</div>
+  <div class="hint" id="hint">👆 点这里听天气<br><small>长按切换语速</small></div>
 </div>
-<div class="detail" id="detail"><div id="dcon"></div></div>
+<div class="detail" id="detail">
+  <div id="dcon"></div>
+  <div class="close-btn" onclick="document.getElementById('detail').classList.remove('show')">▼ 收起</div>
+</div>
 
 <script>
-var speaking=false,utt=null;
+var speaking=false,utt=null,errorMode=false;
+var RATES=[0.75,0.88,1.02],RATE_NAMES=['慢','正常','快'],rateIdx=1;
+var pressTimer=null,isLongPress=false,touchDone=false;
+
+function vib(){try{navigator.vibrate&&navigator.vibrate(20)}catch(e){}}
+function validCoord(lat,lon){return typeof lat==='number'&&typeof lon==='number'&&lat>=-90&&lat<=90&&lon>=-180&&lon<=180}
 
 var WMO={0:{i:'☀️',d:'晴天'},1:{i:'🌤️',d:'少云'},2:{i:'⛅',d:'多云'},3:{i:'☁️',d:'阴天'},45:{i:'🌫️',d:'有雾'},48:{i:'🌫️',d:'浓雾'},51:{i:'🌦️',d:'毛毛雨'},53:{i:'🌦️',d:'小雨'},55:{i:'🌧️',d:'中雨'},56:{i:'🌧️',d:'冻毛毛雨'},57:{i:'🌧️',d:'冻雨'},61:{i:'🌧️',d:'小雨'},63:{i:'🌧️',d:'中雨'},65:{i:'🌧️',d:'大雨'},66:{i:'🌧️',d:'冻雨'},67:{i:'🌧️',d:'大冻雨'},71:{i:'❄️',d:'小雪'},73:{i:'❄️',d:'中雪'},75:{i:'❄️',d:'大雪'},77:{i:'🌨️',d:'雨夹雪'},80:{i:'🌦️',d:'阵雨'},81:{i:'🌧️',d:'中阵雨'},82:{i:'⛈️',d:'大阵雨'},85:{i:'🌨️',d:'小阵雪'},86:{i:'🌨️',d:'大阵雪'},95:{i:'⛈️',d:'雷阵雨'},96:{i:'⛈️',d:'雷暴冰雹'},99:{i:'⛈️',d:'强雷暴'}};
 var RAIN=new Set([51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99]);
 var BFORT=[[0,'无风'],[1,'软风'],[2,'轻风'],[3,'微风'],[4,'和风'],[5,'清劲风'],[6,'强风'],[7,'疾风'],[8,'大风'],[9,'烈风'],[10,'狂风'],[11,'暴风'],[12,'飓风']];
-function wind(s){var v='';for(var i=BFORT.length-1;i>=0;i--){if(s>=BFORT[i][0])v=BFORT[i][1]}return v||'无风'}
+function wind(s){var v='';for(var i=BFORT.length-1;i>=0;i--)if(s>=BFORT[i][0])v=BFORT[i][1];return v||'无风'}
 function wc(c){return WMO[c]||{i:'🌤️',d:'多云'}}
-function night(){var h=new Date().getHours();return h<6||h>=19}
-function theme(c,t){var cls='';if(RAIN.has(c))cls='rain';else if(night())cls='night';else if(typeof t==='number'&&t>33)cls='hot';document.body.className=cls}
+function isNight(){var h=new Date().getHours();return h<6||h>=19}
+function theme(c,t){var cls='';if(RAIN.has(c))cls='rain';else if(isNight())cls='night';else if(typeof t==='number'&&t>33)cls='hot';document.body.className=cls}
 function day(off){var d=new Date();d.setDate(d.getDate()+off);var l=['今天','明天','后天'];return(l[off]||'大后天')+'（'+(d.getMonth()+1)+'月'+d.getDate()+'号）'}
+function fmtHour(h){if(h===0)return'凌晨12点';if(h<6)return'凌晨'+h+'点';if(h===6)return'早上6点';if(h<12)return'上午'+h+'点';if(h===12)return'中午12点';if(h<18)return'下午'+(h-12)+'点';if(h===18)return'傍晚6点';return'晚上'+(h-12)+'点'}
 
-function vibrate(){try{navigator.vibrate&&navigator.vibrate(20)}catch(e){}}
-
-function getPos(){
-  return new Promise(function(ok,no){
-    if(!navigator.geolocation){no();return}
-    navigator.geolocation.getCurrentPosition(
-      function(p){ok({lat:p.coords.latitude,lon:p.coords.longitude,city:''})},
-      function(){no()},
-      {enableHighAccuracy:true,timeout:10000}
-    );
-  });
+function xfetch(url,ms){
+  ms=ms||15000;var ctrl;try{ctrl=new AbortController();}catch(e){}
+  var opt={};if(ctrl)opt.signal=ctrl.signal;
+  var t=setTimeout(function(){if(ctrl)ctrl.abort();},ms);
+  return fetch(url,opt).then(function(r){clearTimeout(t);return r},function(e){clearTimeout(t);throw e});
 }
 
-function validCoord(lat,lon){
-  return typeof lat==='number'&&typeof lon==='number'&&lat>=-90&&lat<=90&&lon>=-180&&lon<=180&&!isNaN(lat)&&!isNaN(lon);
+function getPos(){
+  return new Promise(function(ok){
+    if(!navigator.geolocation){tryIP();return}
+    navigator.geolocation.getCurrentPosition(
+      function(p){ok({lat:p.coords.latitude,lon:p.coords.longitude})},
+      function(){tryIP()},
+      {enableHighAccuracy:true,timeout:10000}
+    );
+    function tryIP(){
+      xfetch('https://ip-api.com/json/?fields=status,lat,lon,city',8000).then(function(r){return r.json()}).then(function(d){
+        if(d.status==='success'&&validCoord(d.lat,d.lon))ok({lat:d.lat,lon:d.lon,city:d.city||''});
+        else throw 0;
+      }).catch(function(){
+        ok({lat:35.86,lon:104.19,city:'北京'});
+      });
+    }
+  });
 }
 
 function getCityByGeo(lat,lon){
-  var url='https://nominatim.openstreetmap.org/reverse?lat='+lat+'&lon='+lon+'&format=json&accept-language=zh-CN';
-  return fetch(url,{signal:AbortSignal.timeout(3000),headers:{'User-Agent':'WeatherFarmer/1.0'}})
+  return xfetch('https://nominatim.openstreetmap.org/reverse?lat='+lat+'&lon='+lon+'&format=json&accept-language=zh-CN',5000)
     .then(function(r){return r.json()})
-    .then(function(d){
-      var a=d.address||{};
-      return(a.city||a.town||a.county||a.state||'')+(a.suburb||a.village||'');
-    })
+    .then(function(d){var a=d.address||{};return(a.city||a.town||a.county||'')+(a.suburb||a.village||'')})
     .catch(function(){return''});
 }
 
-function getIP(){
-  return fetch('https://ip-api.com/json/?lang=zh-CN&fields=status,country,regionName,city,lat,lon', {signal:AbortSignal.timeout(5000)})
+function getWeatherCity(lat,lon){
+  return xfetch('https://geocoding-api.open-meteo.com/v1/search?name='+lat.toFixed(2)+','+lon.toFixed(2)+'&count=1&language=zh',5000)
     .then(function(r){return r.json()})
-    .then(function(d){
-      if(!d.lat||!d.lon||!validCoord(d.lat,d.lon))throw 0;
-      return{lat:d.lat,lon:d.lon,city:d.city||d.region||d.country||''}
-    });
+    .then(function(d){if(d.results&&d.results[0]){var r=d.results[0];return(r.admin1||'')+(r.name||'')}return''})
+    .catch(function(){return''});
 }
 
-function getWeather(lat,lon){
-  var url='https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)
-    +'&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m'
-    +'&hourly=temperature_2m,weather_code,precipitation'
-    +'&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max'
-    +'&timezone=auto&forecast_days=4';
-  return fetch(url,{signal:AbortSignal.timeout(10000)})
-    .then(function(r){if(!r.ok)throw 0;return r.json()});
+var WTTR_MAP={113:0,116:2,119:3,122:3,143:45,176:80,179:71,182:66,185:56,200:95,227:75,230:86,248:48,260:56,263:51,266:53,281:56,284:57,293:61,296:61,299:63,302:63,305:65,308:65,311:66,314:67,317:66,320:71,323:73,326:75,329:77,332:77,335:75,338:73,350:56,353:80,356:81,359:82,362:66,365:67,368:71,371:73,374:77,377:77,386:95,389:96,392:99,395:86};
+function cvtWttr(dt){
+  if(!dt||!dt.current_condition||!dt.weather)return null;
+  var cc=dt.current_condition[0]||{};
+  var now={temperature_2m:parseInt(cc.temp_C)||0,weather_code:WTTR_MAP[parseInt(cc.weatherCode)]||0,wind_speed_10m:(parseInt(cc.windspeedKmph)||0)/3.6,relative_humidity_2m:parseInt(cc.humidity)||0};
+  var daily={temperature_2m_max:[],temperature_2m_min:[],weather_code:[],precipitation_probability_max:[],wind_speed_10m_max:[]};
+  for(var i=0;i<4;i++){var dd=dt.weather[i]||{};var hh=(dd.hourly||[]);var nn=hh[4]||hh[0]||{};daily.temperature_2m_max.push(parseInt(dd.maxtempC)||0);daily.temperature_2m_min.push(parseInt(dd.mintempC)||0);daily.weather_code.push(WTTR_MAP[parseInt(nn.weatherCode)]||0);daily.precipitation_probability_max.push(parseInt(nn.chanceofrain)||0);daily.wind_speed_10m_max.push((parseInt(nn.windspeedKmph)||0)/3.6);}
+  return{current:now,daily:daily,hourly:dt.current_condition?null:null};
 }
 
-function say(text){
-  return new Promise(function(ok,no){
-    if(!window.speechSynthesis){console.log('不支持语音');no();return}
-    window.speechSynthesis.cancel();
-    var u=new SpeechSynthesisUtterance(text);
-    u.lang='zh-CN';u.rate=0.85;u.pitch=1;u.volume=1;
-    var v=window.speechSynthesis.getVoices();
-    console.log('可用语音:',v.length);
-    var zh=v.find(function(x){return x.lang.indexOf('zh')>=0||x.lang.indexOf('cmn')>=0});
-    if(zh){u.voice=zh;console.log('使用语音:',zh.name)}
-    else if(v.length>0){u.voice=v[0];console.log('使用默认语音:',v[0].name)}
-    u.onend=function(){console.log('播放完成');ok()};
-    u.onerror=function(e){console.log('播放错误:',e);no(e)};
-    try{window.speechSynthesis.speak(u)}catch(e){console.log('speak异常:',e);no(e)}
-  });
+async function getWeather(lat,lon){
+  var apis=[
+    {name:'Me',url:'https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)+'&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max&timezone=auto&forecast_days=4'},
+    {name:'Wi',url:'https://wttr.in/'+lat.toFixed(2)+','+lon.toFixed(2)+'?format=j1'}
+  ];
+  for(var attempt=0;attempt<2;attempt++){
+    for(var i=0;i<apis.length;i++){
+      try{
+        var r=await xfetch(apis[i].url,20000);
+        if(!r.ok)continue;
+        var d=await r.json();
+        if(apis[i].name==='Wi')d=cvtWttr(d);
+        if(!d||!d.current||!d.daily)continue;
+        return d;
+      }catch(e){}
+    }
+  }
+  throw new Error('NO_DATA');
 }
 
 function getRainLevel(code,precip){
@@ -129,284 +146,177 @@ function getRainLevel(code,precip){
 }
 
 function getRainPeriods(hourly,startIdx,endIdx){
-  var periods=[];
-  var inRain=false;
-  var startHour=0;
-  var maxPrecip=0;
+  var periods=[],inRain=false,startHour=0,maxP=0;
   for(var i=startIdx;i<endIdx;i++){
     var code=hourly.weather_code[i];
-    var rain=hourly.precipitation[i]||0;
-    var isRaining=RAIN.has(code)||rain>0.1;
-    if(isRaining&&!inRain){
-      inRain=true;
-      startHour=i;
-      maxPrecip=rain;
-    }else if(isRaining&&inRain){
-      maxPrecip=Math.max(maxPrecip,rain);
-    }else if(!isRaining&&inRain){
-      inRain=false;
-      periods.push({start:startHour,end:i,level:getRainLevel(code,maxPrecip)});
-      maxPrecip=0;
-    }
+    var prc=hourly.precipitation[i]||0;
+    var raining=RAIN.has(code)||prc>0.1;
+    if(raining&&!inRain){inRain=true;startHour=i;maxP=prc}
+    else if(raining&&inRain){maxP=Math.max(maxP,prc)}
+    else if(!raining&&inRain){inRain=false;periods.push({s:startHour,e:i,lv:getRainLevel(code,maxP)});maxP=0}
   }
-  if(inRain)periods.push({start:startHour,end:endIdx,level:getRainLevel(0,maxPrecip)});
+  if(inRain)periods.push({s:startHour,e:endIdx,lv:getRainLevel(0,maxP)});
   return periods;
 }
 
-function fmtHour(h){
-  if(h===0)return'凌晨12点';
-  if(h<6)return'凌晨'+h+'点';
-  if(h===6)return'早上6点';
-  if(h<12)return'上午'+h+'点';
-  if(h===12)return'中午12点';
-  if(h<18)return'下午'+(h-12)+'点';
-  if(h===18)return'傍晚6点';
-  return'晚上'+(h-12)+'点';
+function describeRain(periods,offset){
+  if(!periods||!periods.length)return'';
+  var s='';
+  for(var i=0;i<periods.length;i++){
+    var p=periods[i];
+    var sh=p.s-offset,eh=p.e-offset;
+    var hrs=eh-sh;
+    var dur=hrs>1?'持续'+hrs+'个小时':'一个小时左右';
+    if(i>0)s+='，还有';
+    if(sh===eh)s+=fmtHour(sh)+'左右会下'+p.lv;
+    else s+=fmtHour(sh)+'到'+fmtHour(eh)+'会下'+p.lv+'，'+dur;
+  }
+  return s;
 }
 
-function buildText(d){
+function splitTxt(t){
+  var ss=t.match(/.*?[。！？]/g);
+  if(!ss||!ss.length)ss=[t];
+  var chunks=[],cur='';
+  for(var i=0;i<ss.length;i++){if((cur+ss[i]).length>120&&cur){chunks.push(cur);cur=ss[i]}else cur+=ss[i]}
+  if(cur)chunks.push(cur);
+  return chunks;
+}
+
+function say(text){
+  return new Promise(function(ok,no){
+    if(!window.speechSynthesis){no();return}
+    window.speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang='zh-CN';u.rate=RATES[rateIdx];u.pitch=1.02;u.volume=1;
+    var v=window.speechSynthesis.getVoices();
+    var zh=v.find(function(x){return x.lang.indexOf('zh-CN')>=0||x.lang.indexOf('zh-TW')>=0});
+    if(zh)u.voice=zh;else if(v.length>0)u.voice=v[0];
+    u.onend=function(){utt=null;ok()};
+    u.onerror=function(e){utt=null;no(e)};
+    window.speechSynthesis.speak(u);
+    utt=u;
+  });
+}
+
+function speakAll(text){
+  var chunks=splitTxt(text);var i=0;
+  function next(){if(i>=chunks.length||!speaking)return Promise.resolve();return say(chunks[i++]).then(function(){return new Promise(function(r){setTimeout(r,200)}).then(next)})}
+  return next();
+}
+
+function buildText(d,city){
   var parts=[];
-  var now=new Date();
-  var hour=now.getHours();
-  var minute=now.getMinutes();
-  var timeStr='';
-  if(hour<6)timeStr='凌晨'+hour+'点'+minute+'分';
-  else if(hour<12)timeStr='上午'+hour+'点'+minute+'分';
-  else if(hour<14)timeStr='中午'+hour+'点'+minute+'分';
-  else if(hour<18)timeStr='下午'+hour+'点'+minute+'分';
-  else timeStr='晚上'+hour+'点'+minute+'分';
+  var now=new Date(),hour=now.getHours(),min=now.getMinutes();
+  var ts='';
+  if(hour<6)ts='凌晨'+hour+'点'+min+'分';else if(hour<12)ts='上午'+hour+'点'+min+'分';
+  else if(hour<14)ts='中午'+hour+'点'+min+'分';else if(hour<18)ts='下午'+hour+'点'+min+'分';
+  else ts='晚上'+hour+'点'+min+'分';
+
+  parts.push('蔡红英你好！');
+  parts.push('现在是'+ts+'。开始播报天气。');
+  if(city)parts.push('您所在的位置是'+city+'。');
   
-  parts.push('现在是'+timeStr+'。');
-  parts.push('开始播报天气。');
-  
-  if(d._city){
-    parts.push('您所在的位置是'+d._city+'。');
-  }
-  
-  var nowW=wc(d.current.weather_code);
+  var w=wc(d.current.weather_code);
   theme(d.current.weather_code,d.current.temperature_2m);
-  var tmp=Math.round(d.current.temperature_2m)||0;
-  var hum=d.current.relative_humidity_2m||0;
-  parts.push('现在天气：'+nowW.d+'，温度'+tmp+'度，'+wind(d.current.wind_speed_10m)+'，湿度百分之'+hum+'。');
-  
+  var t=Math.round(d.current.temperature_2m)||0,h=d.current.relative_humidity_2m||0;
+  parts.push('现在天气：'+w.d+'，温度'+t+'度，'+wind(d.current.wind_speed_10m)+'，湿度百分之'+h+'。');
+
   if(d.hourly){
     var todayRain=getRainPeriods(d.hourly,0,24);
-    if(todayRain.length>0){
-      var rainDesc='今天';
-      for(var i=0;i<todayRain.length;i++){
-        var r=todayRain[i];
-        var hours=r.end-r.start;
-        var duration=hours>1?'持续'+hours+'个小时':'一个小时左右';
-        if(i>0)rainDesc+='和';
-        if(r.start===r.end){
-          rainDesc+=fmtHour(r.start)+'左右会下'+r.level;
-        }else{
-          rainDesc+=fmtHour(r.start)+'到'+fmtHour(r.end)+'会下'+r.level+'，'+duration;
-        }
-      }
-      rainDesc+='。';
-      parts.push(rainDesc);
-    }
-    
+    if(todayRain.length)parts.push('今天'+describeRain(todayRain,0)+'。');
     var tmrRain=getRainPeriods(d.hourly,24,48);
-    if(tmrRain.length>0){
-      var tmrDesc='明天';
-      for(var i=0;i<tmrRain.length;i++){
-        var r=tmrRain[i];
-        var hours=r.end-r.start;
-        var duration=hours>1?'持续'+hours+'个小时':'一个小时左右';
-        var startH=r.start-24;
-        var endH=r.end-24;
-        if(i>0)tmrDesc+='和';
-        if(startH===endH){
-          tmrDesc+=fmtHour(startH)+'左右会下'+r.level;
-        }else{
-          tmrDesc+=fmtHour(startH)+'到'+fmtHour(endH)+'会下'+r.level+'，'+duration;
-        }
-      }
-      tmrDesc+='。';
-      parts.push(tmrDesc);
-    }
-    
-    var dayAfterRain=getRainPeriods(d.hourly,48,72);
-    if(dayAfterRain.length>0){
-      var daDesc='后天';
-      for(var i=0;i<dayAfterRain.length;i++){
-        var r=dayAfterRain[i];
-        var hours=r.end-r.start;
-        var duration=hours>1?'持续'+hours+'个小时':'一个小时左右';
-        var startH=r.start-48;
-        var endH=r.end-48;
-        if(i>0)daDesc+='和';
-        if(startH===endH){
-          daDesc+=fmtHour(startH)+'左右会下'+r.level;
-        }else{
-          daDesc+=fmtHour(startH)+'到'+fmtHour(endH)+'会下'+r.level+'，'+duration;
-        }
-      }
-      daDesc+='。';
-      parts.push(daDesc);
-    }
-    
-    if(todayRain.length===0&&tmrRain.length===0&&dayAfterRain.length===0){
-      parts.push('未来三天都没有雨。');
-    }
+    if(tmrRain.length)parts.push('明天'+describeRain(tmrRain,24)+'。');
+    var daRain=getRainPeriods(d.hourly,48,72);
+    if(daRain.length)parts.push('后天'+describeRain(daRain,48)+'。');
+    if(!todayRain.length&&!tmrRain.length&&!daRain.length)parts.push('未来三天都没有雨。');
   }
-  
+
   for(var i=0;i<4;i++){
     var dw=wc(d.daily.weather_code[i]);
-    var mx=Math.round(d.daily.temperature_2m_max[i]||0);
-    var mn=Math.round(d.daily.temperature_2m_min[i]||0);
+    var mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0);
     var wd=wind(d.daily.wind_speed_10m_max[i]||0);
     var s=day(i)+'：'+dw.d+'，'+mn+'度到'+mx+'度';
     if(wd!=='无风'&&wd!=='软风'&&wd!=='轻风')s+='，'+wd;
     parts.push(s+'。');
   }
-  
+
   var adv=[];
-  var tc=d.daily.weather_code[0],tmc=d.daily.weather_code[1];
-  var rp=Math.max(d.daily.precipitation_probability_max[0]||0,d.daily.precipitation_probability_max[1]||0);
-  if(RAIN.has(tc)||RAIN.has(tmc))adv.push('最近有雨，不适合打药施肥。');
-  else if(rp>50)adv.push('可能下雨，注意抢收粮食。');
+  if(RAIN.has(d.daily.weather_code[0])||RAIN.has(d.daily.weather_code[1]))adv.push('最近有雨，不适合打药施肥。');
+  else if(Math.max(d.daily.precipitation_probability_max[0]||0,d.daily.precipitation_probability_max[1]||0)>50)adv.push('可能下雨，注意抢收粮食。');
   if(d.daily.temperature_2m_max[0]>35)adv.push('温度高，注意防暑。');
   if(d.daily.temperature_2m_min[0]<5)adv.push('温度低，大棚注意保暖。');
-  if(adv.length===0)adv.push('天气不错，适合下地干活。');
+  if(Math.max(d.daily.wind_speed_10m_max[0]||0,d.daily.wind_speed_10m_max[1]||0)>30)adv.push('风大，不适合喷农药。');
+  if(!adv.length)adv.push('天气不错，适合下地干活。');
   parts.push('种地提醒：'+adv.join(''));
   parts.push('播报完毕，祝您丰收！');
   return parts.join('');
 }
 
-function splitText(t){
-  var ss=t.match(/.*?[。！？]/g);
-  if(!ss||ss.length===0)ss=[t];
-  var chunks=[],cur='';
-  for(var i=0;i<ss.length;i++){
-    if((cur+ss[i]).length>150&&cur){chunks.push(cur);cur=ss[i]}
-    else cur+=ss[i];
-  }
-  if(cur)chunks.push(cur);
-  return chunks;
-}
-
-function speakAll(text){
-  var chunks=splitText(text);
-  var i=0;
-  function next(){
-    if(i>=chunks.length||!speaking)return Promise.resolve();
-    return say(chunks[i++]).then(function(){return new Promise(function(r){setTimeout(r,200)}).then(next)});
-  }
-  return next();
-}
-
 function showDetail(d){
-  var now=d.current;
-  var w=wc(now.weather_code);
+  var now=d.current,w=wc(now.weather_code);
   var h='<div class="row"><span>当前</span><span>'+w.d+' '+Math.round(now.temperature_2m)+'°C 湿度'+(now.relative_humidity_2m||0)+'%</span></div>';
-  for(var i=0;i<4;i++){
-    var dw=wc(d.daily.weather_code[i]);
-    var mx=Math.round(d.daily.temperature_2m_max[i]||0);
-    var mn=Math.round(d.daily.temperature_2m_min[i]||0);
-    var rn=d.daily.precipitation_probability_max[i]||0;
-    var labels=['今天','明天','后天','大后天'];
-    h+='<div class="row"><span>'+labels[i]+'</span><span>'+dw.d+' '+mn+'~'+mx+'°C 降雨'+rn+'%</span></div>';
-  }
+  for(var i=0;i<4;i++){var dw=wc(d.daily.weather_code[i]),mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0),rn=d.daily.precipitation_probability_max[i]||0;h+='<div class="row"><span>'+['今天','明天','后天','大后天'][i]+'</span><span>'+dw.d+' '+mn+'~'+mx+'°C 降雨'+rn+'%</span></div>';}
   document.getElementById('dcon').innerHTML=h;
   document.getElementById('detail').classList.add('show');
 }
-
 function setUI(d){
-  var now=d.current;
-  var w=wc(now.weather_code);
-  document.getElementById('icon').textContent=night()?{'☀️':'🌙','🌤️':'🌙'}.get(w.i)||w.i:w.i;
+  var now=d.current,w=wc(now.weather_code);
+  document.getElementById('icon').textContent=isNight()?({'☀️':'🌙','🌤️':'🌙'})[w.i]||w.i:w.i;
   document.getElementById('dot').className='dot ok';
-  document.getElementById('hint').textContent='🔊 正在播报...';
+  document.getElementById('hint').innerHTML='🔊 正在播报...';
   showDetail(d);
 }
 
-function go(){
-  vibrate();
-  var btn=document.getElementById('btn');
-  var ico=document.getElementById('ico');
-  var hint=document.getElementById('hint');
-  var dot=document.getElementById('dot');
-  var icon=document.getElementById('icon');
-
-  if(speaking){
-    speaking=false;
-    window.speechSynthesis.cancel();
-    utt=null;
-    btn.className='btn';
-    ico.textContent='▶';
-    hint.textContent='👆 点这里听天气';
-    dot.className='dot';
-    return;
-  }
-
-  if(!window.speechSynthesis){
-    hint.textContent='请用Chrome浏览器打开';
-    say('当前浏览器不支持语音，请用Chrome浏览器打开此页面。').catch(function(){});
-    return;
-  }
-
-  speaking=true;
-  btn.className='btn load';
-  ico.textContent='📍';
-  hint.textContent='正在获取位置...';
-  dot.className='dot';
-  icon.textContent='🌤️';
-  console.log('开始获取位置...');
-
-  function fail(msg){
-    console.log('失败:',msg);
-    btn.className='btn';
-    ico.textContent='▶';
-    speaking=false;
-    dot.className='dot err';
-    hint.textContent='网络慢，再点一次';
-    say('网络不太顺畅，再点一次试试。').catch(function(e){console.log('错误语音也失败:',e)});
-  }
-
-  var city='';
-  var posPromise=getPos().then(function(p){
-    return getCityByGeo(p.lat,p.lon).then(function(c){city=c||'';return p});
-  }).catch(function(e){
-    console.log('GPS失败:',e);
-    return getIP().then(function(p){city=p.city||'';return p}).catch(function(e2){
-      console.log('IP也失败:',e2);
-      city='北京';
-      return{lat:35.86,lon:104.19}
-    });
-  });
-
-  posPromise.then(function(pos){
-    console.log('位置:',pos);
-    ico.textContent='🌐';
-    hint.textContent='正在查天气...';
-    return getWeather(pos.lat,pos.lon);
-  }).then(function(d){
-    d._city=city;
-    console.log('天气数据:',d.current);
-    setUI(d);
-    btn.className='btn speak';
-    ico.textContent='⏹';
-    speaking=true;
-    return speakAll(buildText(d));
-  }).then(function(){
-    console.log('播报完成');
-    btn.className='btn';
-    ico.textContent='▶';
-    hint.textContent='👆 再听一遍';
-    speaking=false;
-  }).catch(function(e){
-    console.log('错误:',e);
-    fail(e);
-  });
+function onDown(e){
+  if(e.type==='mousedown'&&touchDone)return;
+  if(e.type==='touchstart')touchDone=true;
+  vib();isLongPress=false;clearTimeout(pressTimer);
+  pressTimer=setTimeout(function(){
+    isLongPress=true;vib();vib();
+    rateIdx=(rateIdx+1)%RATES.length;
+    say('语速'+RATE_NAMES[rateIdx]).catch(function(){});
+    document.getElementById('hint').innerHTML='语速：'+RATE_NAMES[rateIdx]+'<br><small>长按切换语速</small>';
+    setTimeout(function(){if(!speaking)document.getElementById('hint').innerHTML='👆 点这里听天气<br><small>长按切换语速</small>';},2000);
+  },600);
+}
+function onUp(e){
+  if(e.type==='mouseup'&&touchDone)return;
+  if(e.type==='touchend')setTimeout(function(){touchDone=false;},300);
+  vib();clearTimeout(pressTimer);
+  if(!isLongPress)go();
+  isLongPress=false;
 }
 
-if(window.speechSynthesis){
-  window.speechSynthesis.onvoiceschanged=function(){window.speechSynthesis.getVoices()};
-  window.speechSynthesis.getVoices();
+async function go(){
+  var btn=document.getElementById('btn'),ico=document.getElementById('ico'),hint=document.getElementById('hint'),dot=document.getElementById('dot'),icon=document.getElementById('icon');
+  vib();
+  if(errorMode){errorMode=false;speaking=false;window.speechSynthesis.cancel();btn.className='btn';ico.textContent='▶';hint.innerHTML='👆 点这里听天气<br><small>长按切换语速</small>';dot.className='dot';return}
+  if(speaking){speaking=false;window.speechSynthesis.cancel();utt=null;btn.className='btn';ico.textContent='▶';hint.innerHTML='👆 点这里听天气<br><small>长按切换语速</small>';dot.className='dot';return}
+  if(!window.speechSynthesis){hint.innerHTML='请用Chrome浏览器打开';say('请用Chrome浏览器打开此页面').catch(function(){});return}
+
+  speaking=true;btn.className='btn load';ico.textContent='📍';hint.innerHTML='正在获取位置...';dot.className='dot';icon.textContent='🌤️';
+
+  try{
+    var pos=await getPos();
+    ico.textContent='🌐';hint.innerHTML='正在查天气...';
+    var city=pos.city||'';
+    if(!city)try{city=await getCityByGeo(pos.lat,pos.lon)}catch(e){}
+    if(!city)try{city=await getWeatherCity(pos.lat,pos.lon)}catch(e){}
+    var d=await getWeather(pos.lat,pos.lon);
+    setUI(d);btn.className='btn speak';ico.textContent='⏹';
+    await speakAll(buildText(d,city));
+    btn.className='btn';ico.textContent='▶';hint.innerHTML='👆 再听一遍<br><small>长按切换语速</small>';speaking=false;
+  }catch(e){
+    speaking=false;btn.className='btn';ico.textContent='▶';dot.className='dot err';hint.innerHTML='网络慢，再点一次';
+    errorMode=true;
+    await say('网络不太顺畅，再点一次试试。').catch(function(){});
+    errorMode=false;
+    hint.innerHTML='👆 点这里听天气<br><small>长按切换语速</small>';
+  }
 }
+
+if(window.speechSynthesis){window.speechSynthesis.onvoiceschanged=function(){window.speechSynthesis.getVoices()};window.speechSynthesis.getVoices()}
 </script>
 </body>
 </html>
