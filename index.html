@@ -93,9 +93,17 @@ function getPos(){
 }
 
 function getCityByGeo(lat,lon){
-  return xfetch('https://nominatim.openstreetmap.org/reverse?lat='+lat+'&lon='+lon+'&format=json&accept-language=zh-CN',5000)
+  return xfetch('https://nominatim.openstreetmap.org/reverse?lat='+lat+'&lon='+lon+'&format=json&accept-language=zh-CN&zoom=18',5000)
     .then(function(r){return r.json()})
-    .then(function(d){var a=d.address||{};return(a.city||a.town||a.county||'')+(a.suburb||a.village||'')})
+    .then(function(d){
+      var a=d.address||{};
+      var parts=[];
+      if(a.village)parts.push(a.village);
+      if(a.town)parts.push(a.town);
+      if(a.county)parts.push(a.county);
+      if(a.state)parts.push(a.state);
+      return parts.length>0?parts.join(''):(a.city||a.display_name||'');
+    })
     .catch(function(){return''});
 }
 
@@ -213,14 +221,20 @@ function buildText(d,city){
   else if(hour<14)ts='中午'+hour+'点'+min+'分';else if(hour<18)ts='下午'+hour+'点'+min+'分';
   else ts='晚上'+hour+'点'+min+'分';
 
-  parts.push('蔡红英你好！');
+  parts.push('你好！');
   parts.push('现在是'+ts+'。开始播报天气。');
   if(city)parts.push('您所在的位置是'+city+'。');
   
   var w=wc(d.current.weather_code);
   theme(d.current.weather_code,d.current.temperature_2m);
   var t=Math.round(d.current.temperature_2m)||0,h=d.current.relative_humidity_2m||0;
-  parts.push('现在天气：'+w.d+'，温度'+t+'度，'+wind(d.current.wind_speed_10m)+'，湿度百分之'+h+'。');
+  var humidDesc='';
+  if(h>=85)humidDesc='，空气很湿润，地面返潮';
+  else if(h>=70)humidDesc='，空气比较潮湿';
+  else if(h>=50)humidDesc='，湿度适中';
+  else if(h>=30)humidDesc='，空气有点干';
+  else humidDesc='，空气很干燥';
+  parts.push('现在天气：'+w.d+'，温度'+t+'度，'+wind(d.current.wind_speed_10m)+'，'+humidDesc+'。');
 
   if(d.hourly){
     var todayRain=getRainPeriods(d.hourly,0,24);
@@ -236,9 +250,28 @@ function buildText(d,city){
     var dw=wc(d.daily.weather_code[i]);
     var mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0);
     var wd=wind(d.daily.wind_speed_10m_max[i]||0);
+    var rn=d.daily.precipitation_probability_max[i]||0;
     var s=day(i)+'：'+dw.d+'，'+mn+'度到'+mx+'度';
+    
+    if(rn>20){
+      var rainProb='';
+      if(rn>=90)rainProb='很可能要下';
+      else if(rn>=70)rainProb='八九成要下';
+      else if(rn>=50)rainProb='五六成可能下';
+      else rainProb='三四成可能下';
+      s+='，'+rainProb;
+    }
+    
     if(wd!=='无风'&&wd!=='软风'&&wd!=='轻风')s+='，'+wd;
-    parts.push(s+'。');
+    s+='。';
+    
+    if(d.hourly&&rn>20){
+      var dayStart=i*24,dayEnd=(i+1)*24;
+      var dayRain=getRainPeriods(d.hourly,dayStart,dayEnd);
+      if(dayRain.length)s+=describeRain(dayRain,dayStart);
+    }
+    
+    parts.push(s);
   }
 
   var adv=[];
@@ -256,7 +289,26 @@ function buildText(d,city){
 function showDetail(d){
   var now=d.current,w=wc(now.weather_code);
   var h='<div class="row"><span>当前</span><span>'+w.d+' '+Math.round(now.temperature_2m)+'°C 湿度'+(now.relative_humidity_2m||0)+'%</span></div>';
-  for(var i=0;i<4;i++){var dw=wc(d.daily.weather_code[i]),mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0),rn=d.daily.precipitation_probability_max[i]||0;h+='<div class="row"><span>'+['今天','明天','后天','大后天'][i]+'</span><span>'+dw.d+' '+mn+'~'+mx+'°C 降雨'+rn+'%</span></div>';}
+  for(var i=0;i<4;i++){
+    var dw=wc(d.daily.weather_code[i]),mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0),rn=d.daily.precipitation_probability_max[i]||0;
+    var rainText='';
+    if(rn>20){
+      if(rn>=90)rainText='很可能下';
+      else if(rn>=70)rainText='八九成下';
+      else if(rn>=50)rainText='五六成下';
+      else rainText='三四成下';
+    }
+    h+='<div class="row"><span>'+['今天','明天','后天','大后天'][i]+'</span><span>'+dw.d+' '+mn+'~'+mx+'°C'+(rainText?' '+rainText:'')+'</span></div>';
+    
+    if(d.hourly&&rn>20){
+      var dayStart=i*24,dayEnd=(i+1)*24;
+      var dayRain=getRainPeriods(d.hourly,dayStart,dayEnd);
+      if(dayRain.length){
+        var rainDesc=describeRain(dayRain,dayStart);
+        if(rainDesc)h+='<div class="row"><span></span><span>'+rainDesc+'</span></div>';
+      }
+    }
+  }
   document.getElementById('dcon').innerHTML=h;
   document.getElementById('detail').classList.add('show');
 }
