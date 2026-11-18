@@ -82,11 +82,16 @@ function getPos(){
       {enableHighAccuracy:true,timeout:10000}
     );
     function tryIP(){
-      xfetch('https://ip-api.com/json/?fields=status,lat,lon,city',8000).then(function(r){return r.json()}).then(function(d){
-        if(d.status==='success'&&validCoord(d.lat,d.lon))ok({lat:d.lat,lon:d.lon,city:d.city||''});
+      xfetch('https://ipapi.co/json/',8000).then(function(r){return r.json()}).then(function(d){
+        if(validCoord(d.latitude,d.longitude))ok({lat:d.latitude,lon:d.longitude,city:d.city||''});
         else throw 0;
       }).catch(function(){
-        ok({lat:35.86,lon:104.19,city:'北京'});
+        xfetch('https://ip-api.com/json/?fields=status,lat,lon,city',6000).then(function(r){return r.json()}).then(function(d){
+          if(d.status==='success'&&validCoord(d.lat,d.lon))ok({lat:d.lat,lon:d.lon,city:d.city||''});
+          else throw 0;
+        }).catch(function(){
+          ok({lat:32.01,lon:112.12,city:'襄阳'});
+        });
       });
     }
   });
@@ -121,12 +126,18 @@ function cvtWttr(dt){
   var now={temperature_2m:parseInt(cc.temp_C)||0,weather_code:WTTR_MAP[parseInt(cc.weatherCode)]||0,wind_speed_10m:(parseInt(cc.windspeedKmph)||0)/3.6,relative_humidity_2m:parseInt(cc.humidity)||0};
   var daily={temperature_2m_max:[],temperature_2m_min:[],weather_code:[],precipitation_probability_max:[],wind_speed_10m_max:[]};
   for(var i=0;i<4;i++){var dd=dt.weather[i]||{};var hh=(dd.hourly||[]);var nn=hh[4]||hh[0]||{};daily.temperature_2m_max.push(parseInt(dd.maxtempC)||0);daily.temperature_2m_min.push(parseInt(dd.mintempC)||0);daily.weather_code.push(WTTR_MAP[parseInt(nn.weatherCode)]||0);daily.precipitation_probability_max.push(parseInt(nn.chanceofrain)||0);daily.wind_speed_10m_max.push((parseInt(nn.windspeedKmph)||0)/3.6);}
-  return{current:now,daily:daily,hourly:dt.current_condition?null:null};
+  var hourly={temperature_2m:[],weather_code:[],precipitation:[]};
+  for(var i=0;i<4;i++){var hh=(dt.weather[i]||{}).hourly||[];
+    for(var j=0;j<8;j++){var s=hh[j]||{};
+      for(var k=0;k<3;k++){hourly.temperature_2m.push(parseInt(s.tempC)||0);hourly.weather_code.push(WTTR_MAP[parseInt(s.weatherCode)]||0);hourly.precipitation.push(parseFloat(s.precipMM)||0)}
+    }
+  }
+  return{current:now,daily:daily,hourly:hourly};
 }
 
 async function getWeather(lat,lon){
   var apis=[
-    {name:'Me',url:'https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)+'&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max&timezone=auto&forecast_days=4'},
+    {name:'Me',url:'https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(4)+'&longitude='+lon.toFixed(4)+'&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m&hourly=temperature_2m,weather_code,precipitation&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,wind_speed_10m_max&windspeed_unit=ms&timezone=auto&forecast_days=4'},
     {name:'Wi',url:'https://wttr.in/'+lat.toFixed(2)+','+lon.toFixed(2)+'?format=j1'}
   ];
   for(var attempt=0;attempt<2;attempt++){
@@ -145,12 +156,12 @@ async function getWeather(lat,lon){
 }
 
 function getRainLevel(code,precip){
-  if(precip>=50)return'暴雨';
-  if(precip>=25)return'大雨';
-  if(precip>=10)return'中雨';
-  if(precip>=1)return'小雨';
+  if(precip>=16)return'暴雨';
+  if(precip>=8)return'大雨';
+  if(precip>=2.5)return'中雨';
+  if(precip>=0.5)return'小雨';
   if(RAIN.has(code))return'小雨';
-  return'雨';
+  return'毛毛雨';
 }
 
 function getRainPeriods(hourly,startIdx,endIdx){
@@ -216,10 +227,7 @@ function speakAll(text){
 function buildText(d,city){
   var parts=[];
   var now=new Date(),hour=now.getHours(),min=now.getMinutes();
-  var ts='';
-  if(hour<6)ts='凌晨'+hour+'点'+min+'分';else if(hour<12)ts='上午'+hour+'点'+min+'分';
-  else if(hour<14)ts='中午'+hour+'点'+min+'分';else if(hour<18)ts='下午'+hour+'点'+min+'分';
-  else ts='晚上'+hour+'点'+min+'分';
+  var ts=fmtHour(hour)+(min>0?min+'分':'整');
 
   parts.push('你好！');
   parts.push('现在是'+ts+'。开始播报天气。');
@@ -246,11 +254,8 @@ function buildText(d,city){
     if(!todayRain.length&&!tmrRain.length&&!daRain.length)parts.push('未来三天都没有雨。');
   }
 
-  for(var i=0;i<4;i++){
-    var dw=wc(d.daily.weather_code[i]);
-    var mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0);
-    var wd=wind(d.daily.wind_speed_10m_max[i]||0);
-    var rn=d.daily.precipitation_probability_max[i]||0;
+  var nd=Math.min(4,d.daily.weather_code.length);
+  for(var i=0;i<nd;i++){
     var s=day(i)+'：'+dw.d+'，'+mn+'度到'+mx+'度';
     
     if(rn>20){
@@ -265,7 +270,7 @@ function buildText(d,city){
     if(wd!=='无风'&&wd!=='软风'&&wd!=='轻风')s+='，'+wd;
     s+='。';
     
-    if(d.hourly&&rn>20){
+    if(d.hourly&&rn>20&&i===3){
       var dayStart=i*24,dayEnd=(i+1)*24;
       var dayRain=getRainPeriods(d.hourly,dayStart,dayEnd);
       if(dayRain.length)s+=describeRain(dayRain,dayStart);
@@ -279,7 +284,7 @@ function buildText(d,city){
   else if(Math.max(d.daily.precipitation_probability_max[0]||0,d.daily.precipitation_probability_max[1]||0)>50)adv.push('可能下雨，注意抢收粮食。');
   if(d.daily.temperature_2m_max[0]>35)adv.push('温度高，注意防暑。');
   if(d.daily.temperature_2m_min[0]<5)adv.push('温度低，大棚注意保暖。');
-  if(Math.max(d.daily.wind_speed_10m_max[0]||0,d.daily.wind_speed_10m_max[1]||0)>30)adv.push('风大，不适合喷农药。');
+  if(Math.max(d.daily.wind_speed_10m_max[0]||0,d.daily.wind_speed_10m_max[1]||0)>5.4)adv.push('风大，不适合喷农药。');
   if(!adv.length)adv.push('天气不错，适合下地干活。');
   parts.push('种地提醒：'+adv.join(''));
   parts.push('播报完毕，祝您丰收！');
@@ -288,8 +293,9 @@ function buildText(d,city){
 
 function showDetail(d){
   var now=d.current,w=wc(now.weather_code);
+  var nd=Math.min(4,d.daily.weather_code.length);
   var h='<div class="row"><span>当前</span><span>'+w.d+' '+Math.round(now.temperature_2m)+'°C 湿度'+(now.relative_humidity_2m||0)+'%</span></div>';
-  for(var i=0;i<4;i++){
+  for(var i=0;i<nd;i++){
     var dw=wc(d.daily.weather_code[i]),mx=Math.round(d.daily.temperature_2m_max[i]||0),mn=Math.round(d.daily.temperature_2m_min[i]||0),rn=d.daily.precipitation_probability_max[i]||0;
     var rainText='';
     if(rn>20){
